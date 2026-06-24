@@ -6,33 +6,33 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("🌱 Seeding database...");
 
-  // Users
-  const adminPw = await bcrypt.hash("admin123", 12);
-  const doctorPw = await bcrypt.hash("doctor123", 12);
-  const receptPw = await bcrypt.hash("recept123", 12);
+  // BUG FIX 4: Passwords now meet backend policy (uppercase + number + special char)
+  const adminPw = await bcrypt.hash("Admin@123", 12);
+  const doctorPw = await bcrypt.hash("Doctor@123", 12);
+  const receptPw = await bcrypt.hash("Recept@123", 12);
 
   const admin = await prisma.user.upsert({
     where: { email: "admin@clinicflow.com" },
-    update: {},
-    create: { email: "admin@clinicflow.com", password: adminPw, fullName: "Admin User", role: "admin" },
+    update: { password: adminPw },
+    create: { email: "admin@clinicflow.com", password: adminPw, fullName: "Admin User", role: "admin", tokenVersion: 0 },
   });
 
   const doctorUser = await prisma.user.upsert({
     where: { email: "doctor@clinicflow.com" },
-    update: {},
-    create: { email: "doctor@clinicflow.com", password: doctorPw, fullName: "Dr. Sarah Johnson", role: "doctor", phone: "+1-555-0101" },
+    update: { password: doctorPw },
+    create: { email: "doctor@clinicflow.com", password: doctorPw, fullName: "Dr. Sarah Johnson", role: "doctor", phone: "+1-555-0101", tokenVersion: 0 },
   });
 
   const doctorUser2 = await prisma.user.upsert({
     where: { email: "doctor2@clinicflow.com" },
-    update: {},
-    create: { email: "doctor2@clinicflow.com", password: doctorPw, fullName: "Dr. Ahmed Khan", role: "doctor", phone: "+1-555-0102" },
+    update: { password: doctorPw },
+    create: { email: "doctor2@clinicflow.com", password: doctorPw, fullName: "Dr. Ahmed Khan", role: "doctor", phone: "+1-555-0102", tokenVersion: 0 },
   });
 
   await prisma.user.upsert({
     where: { email: "receptionist@clinicflow.com" },
-    update: {},
-    create: { email: "receptionist@clinicflow.com", password: receptPw, fullName: "Jane Smith", role: "receptionist" },
+    update: { password: receptPw },
+    create: { email: "receptionist@clinicflow.com", password: receptPw, fullName: "Jane Smith", role: "receptionist", tokenVersion: 0 },
   });
 
   // Departments
@@ -58,13 +58,13 @@ async function main() {
   const doctor1 = await prisma.doctor.upsert({
     where: { userId: doctorUser.id },
     update: {},
-    create: { userId: doctorUser.id, departmentId: cardio.id, specialization: "Cardiology", licenseNumber: "LIC-001", experience: 10, consultationFee: 150, bio: "Specialist in cardiovascular diseases." },
+    create: { userId: doctorUser.id, departmentId: cardio.id, specialization: "Cardiologist", licenseNumber: "LIC-001", experience: 10, consultationFee: 150, bio: "Experienced cardiologist." },
   });
 
-  const doctor2 = await prisma.doctor.upsert({
+  await prisma.doctor.upsert({
     where: { userId: doctorUser2.id },
     update: {},
-    create: { userId: doctorUser2.id, departmentId: neuro.id, specialization: "Neurology", licenseNumber: "LIC-002", experience: 8, consultationFee: 180, bio: "Expert in neurological disorders." },
+    create: { userId: doctorUser2.id, departmentId: neuro.id, specialization: "Neurologist", licenseNumber: "LIC-002", experience: 8, consultationFee: 200, bio: "Expert neurologist." },
   });
 
   // Patients
@@ -92,7 +92,7 @@ async function main() {
     data: { patientId: patient1.id, doctorId: doctorUser.id, appointmentDate: today, appointmentTime: "09:00", status: "approved", reason: "Regular checkup", createdBy: admin.id },
   });
 
-  const apt2 = await prisma.appointment.create({
+  await prisma.appointment.create({
     data: { patientId: patient2.id, doctorId: doctorUser.id, appointmentDate: today, appointmentTime: "10:30", status: "pending", reason: "Chest pain consultation", createdBy: admin.id },
   });
 
@@ -113,21 +113,25 @@ async function main() {
   });
 
   // Invoice
-  await prisma.invoice.create({
-    data: {
-      invoiceNumber: "INV-00001",
-      patientId: patient1.id,
-      appointmentId: apt1.id,
-      createdById: admin.id,
-      items: [{ description: "Consultation Fee", quantity: 1, unitPrice: 150 }, { description: "ECG Test", quantity: 1, unitPrice: 50 }],
-      subtotal: 200,
-      tax: 10,
-      total: 210,
-      status: "paid",
-      paidAmount: 210,
-      paidAt: new Date(),
-    },
-  });
+  try {
+    await prisma.invoice.create({
+      data: {
+        invoiceNumber: "INV-00001",
+        patientId: patient1.id,
+        appointmentId: apt1.id,
+        createdById: admin.id,
+        items: [{ description: "Consultation Fee", quantity: 1, unitPrice: 150 }, { description: "ECG Test", quantity: 1, unitPrice: 50 }],
+        subtotal: 200,
+        tax: 10,
+        total: 210,
+        status: "paid",
+        paidAmount: 210,
+        paidAt: new Date(),
+      },
+    });
+  } catch {
+    console.log("Invoice already exists, skipping...");
+  }
 
   // Lab Report
   await prisma.labReport.create({
@@ -144,15 +148,15 @@ async function main() {
 
   // Notification
   await prisma.notification.create({
-    data: { userId: admin.id, type: "info", title: "Welcome to ClinicFlow!", message: "Your clinic management system is ready. Start by adding patients and doctors." },
+    data: { userId: admin.id, type: "info", title: "Welcome to ClinicFlow!", message: "Your clinic management system is ready." },
   });
 
   console.log("✅ Seed complete!");
-  console.log("\n📋 Login credentials:");
-  console.log("  Admin:        admin@clinicflow.com     / admin123");
-  console.log("  Doctor:       doctor@clinicflow.com    / doctor123");
-  console.log("  Doctor 2:     doctor2@clinicflow.com   / doctor123");
-  console.log("  Receptionist: receptionist@clinicflow.com / recept123");
+  console.log("\n📋 Login credentials (updated passwords):");
+  console.log("  Admin:        admin@clinicflow.com        / Admin@123");
+  console.log("  Doctor:       doctor@clinicflow.com       / Doctor@123");
+  console.log("  Doctor 2:     doctor2@clinicflow.com      / Doctor@123");
+  console.log("  Receptionist: receptionist@clinicflow.com / Recept@123");
 }
 
 main().catch(console.error).finally(() => prisma.$disconnect());
