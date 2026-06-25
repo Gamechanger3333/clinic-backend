@@ -35,6 +35,28 @@ enum LabReportStatus {
   cancelled
 }
 
+// Every value here must match a string literal passed to auditLog(...)
+// in src/routes/auth.ts and src/middleware/auth.ts
+enum AuthEventType {
+  SIGNUP
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  ACCOUNT_LOCKED
+  OTP_SENT
+  OTP_VERIFIED
+  OTP_FAILED
+  LOGOUT
+  LOGOUT_ALL
+  TOKEN_REFRESHED
+  EMAIL_VERIFIED
+  EMAIL_VERIFICATION_SENT
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  PASSWORD_CHANGED
+  MFA_ENABLED
+  MFA_DISABLED
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -44,6 +66,29 @@ model User {
   avatarUrl String?  @map("avatar_url")
   role         AppRole  @default(receptionist)
   tokenVersion Int      @default(0) @map("token_version")
+
+  // ── Account lockout (DB-persisted, survives restarts) ──
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until")
+
+  // ── Email verification ──
+  isEmailVerified    Boolean   @default(false) @map("is_email_verified")
+  emailVerifyToken   String?   @unique @map("email_verify_token")
+  emailVerifyExpires DateTime? @map("email_verify_expires")
+
+  // ── Password reset ──
+  passwordResetToken   String?   @unique @map("password_reset_token")
+  passwordResetExpires DateTime? @map("password_reset_expires")
+
+  // ── MFA (TOTP) ──
+  mfaEnabled     Boolean  @default(false) @map("mfa_enabled")
+  mfaSecret      String?  @map("mfa_secret")
+  mfaBackupCodes String[] @default([]) @map("mfa_backup_codes")
+
+  // ── Login tracking ──
+  lastLoginAt DateTime? @map("last_login_at")
+  lastLoginIp String?   @map("last_login_ip")
+
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -55,6 +100,10 @@ model User {
   orderedLabReports   LabReport[]
   notifications       Notification[]
   doctor              Doctor?
+
+  refreshTokens RefreshToken[]
+  otpCodes      OtpCode[]
+  authAuditLogs AuthAuditLog[]
 
   @@map("users")
 }
@@ -264,4 +313,52 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  jti       String   @unique
+  userId    String   @map("user_id")
+  userAgent String?  @map("user_agent")
+  ipAddress String?  @map("ip_address")
+  isRevoked Boolean  @default(false) @map("is_revoked")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model OtpCode {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  code      String
+  purpose   String
+  attempts  Int       @default(0)
+  usedAt    DateTime? @map("used_at")
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("otp_codes")
+}
+
+model AuthAuditLog {
+  id        String        @id @default(cuid())
+  event     AuthEventType
+  userId    String?       @map("user_id")
+  email     String?
+  ipAddress String?       @map("ip_address")
+  userAgent String?       @map("user_agent")
+  metadata  Json          @default("{}")
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("auth_audit_logs")
 }
