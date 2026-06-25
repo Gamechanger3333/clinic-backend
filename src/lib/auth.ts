@@ -83,7 +83,7 @@ export const ACCESS_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: isProd,
   sameSite: "lax" as const,
-  maxAge: 15 * 60,           // 15 minutes
+  maxAge: 15 * 60 * 1000,        // ← * 1000 add karo (milliseconds)
   path: "/",
 };
 
@@ -91,8 +91,8 @@ export const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: isProd,
   sameSite: "lax" as const,
-  maxAge: 7 * 24 * 60 * 60,  // 7 days
-  path: "/",                  // broad path for proxy compatibility
+  maxAge: 7 * 24 * 60 * 60 * 1000,  // ← * 1000 add karo (milliseconds)
+  path: "/",
 };
 
 // ─── Password helpers ────────────────────────────────────────────────────────
