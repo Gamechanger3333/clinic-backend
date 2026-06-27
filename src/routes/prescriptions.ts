@@ -5,7 +5,8 @@ import { authenticate, requireRole } from "../middleware/auth";
 const router = Router();
 router.use(authenticate);
 
-router.get("/", async (_req: Request, res: Response) => {
+// Prescriptions are PHI — staff only.
+router.get("/", requireRole("admin", "doctor", "receptionist"), async (_req: Request, res: Response) => {
   const prescriptions = await prisma.prescription.findMany({
     include: {
       patient: { select: { id: true, fullName: true, email: true } },

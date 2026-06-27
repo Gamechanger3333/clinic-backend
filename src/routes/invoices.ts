@@ -5,7 +5,12 @@ import { authenticate, requireRole } from "../middleware/auth";
 const router = Router();
 router.use(authenticate);
 
-router.get("/", async (req: Request, res: Response) => {
+// Billing data — staff only (admin/receptionist handle billing; doctors can
+// view to confirm a visit was billed). Patient self-service is out of scope
+// until Patient<->User linkage exists — see review notes.
+const STAFF_ROLES = ["admin", "doctor", "receptionist"];
+
+router.get("/", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
   const patientId = (req.query.patientId as string) || undefined;
   const status = (req.query.status as string) || undefined;
 
@@ -24,7 +29,7 @@ router.get("/", async (req: Request, res: Response) => {
   return res.json({ invoices });
 });
 
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: req.params.id },
     include: {
@@ -37,7 +42,7 @@ router.get("/:id", async (req: Request, res: Response) => {
   return res.json({ invoice });
 });
 
-router.post("/", async (req: Request, res: Response) => {
+router.post("/", requireRole("admin", "receptionist"), async (req: Request, res: Response) => {
   const { patientId, appointmentId, items = [], discount = 0, tax = 0, notes, dueDate } = req.body;
   if (!patientId) return res.status(400).json({ error: "Patient required" });
   if (!items.length) return res.status(400).json({ error: "At least one item required" });
@@ -54,7 +59,7 @@ router.post("/", async (req: Request, res: Response) => {
   return res.status(201).json({ invoice });
 });
 
-router.patch("/:id", async (req: Request, res: Response) => {
+router.patch("/:id", requireRole("admin", "receptionist"), async (req: Request, res: Response) => {
   const updateData: any = { ...req.body };
   if (req.body.status === "paid" && !req.body.paidAt) updateData.paidAt = new Date();
   const invoice = await prisma.invoice.update({

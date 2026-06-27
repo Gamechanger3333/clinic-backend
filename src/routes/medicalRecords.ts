@@ -1,11 +1,15 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../lib/prisma";
-import { authenticate } from "../middleware/auth";
+import { authenticate, requireRole } from "../middleware/auth";
 
 const router = Router();
 router.use(authenticate);
 
-router.get("/", async (req: Request, res: Response) => {
+// Diagnosis / treatment notes are the most sensitive PHI in the system.
+// Reads: any clinical/admin staff. Writes: doctors and admin only —
+// receptionists should not be able to author clinical notes.
+// Patient self-service is out of scope until Patient<->User linkage exists.
+router.get("/", requireRole("admin", "doctor", "receptionist"), async (req: Request, res: Response) => {
   const patientId = (req.query.patientId as string) || undefined;
   const records = await prisma.medicalRecord.findMany({
     where: { ...(patientId ? { patientId } : {}) },
@@ -18,7 +22,7 @@ router.get("/", async (req: Request, res: Response) => {
   return res.json({ records });
 });
 
-router.post("/", async (req: Request, res: Response) => {
+router.post("/", requireRole("admin", "doctor"), async (req: Request, res: Response) => {
   const { patientId, doctorId, appointmentId, visitDate, chiefComplaint, diagnosis, treatment, notes, followUpDate } = req.body;
   if (!patientId || !doctorId || !visitDate || !chiefComplaint)
     return res.status(400).json({ error: "patientId, doctorId, visitDate, chiefComplaint required" });

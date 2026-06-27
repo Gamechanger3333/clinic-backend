@@ -70,11 +70,23 @@ import {
 const router = Router();
 
 // ─── Input Schemas ────────────────────────────────────────────────────────────
+// SECURITY: `role` is intentionally NOT accepted here. Public self-signup
+// must never be able to grant privileged roles (admin/doctor/receptionist).
+// Privileged accounts are created via POST /api/auth/admin/create-user,
+// which requires an authenticated admin caller.
 const signupSchema = z.object({
   email:    z.string().email("Invalid email address").max(254).toLowerCase().trim(),
   password: z.string().min(8, "Min 8 characters").max(128, "Password too long"),
   fullName: z.string().min(2, "Full name too short").max(100).trim(),
-  role:     z.enum(["admin", "doctor", "receptionist", "patient"]).default("receptionist"),
+  phone:    z.string().max(20).optional(),
+});
+
+// Used only by the admin-only user-creation endpoint below.
+const adminCreateUserSchema = z.object({
+  email:    z.string().email("Invalid email address").max(254).toLowerCase().trim(),
+  password: z.string().min(8, "Min 8 characters").max(128, "Password too long"),
+  fullName: z.string().min(2, "Full name too short").max(100).trim(),
+  role:     z.enum(["admin", "doctor", "receptionist", "patient"]),
   phone:    z.string().max(20).optional(),
 });
 
@@ -175,9 +187,13 @@ router.post("/check-password-strength", (req, res) => {
 });
 
 // ─── POST /api/auth/signup ────────────────────────────────────────────────────
+// Public self-signup always creates a "patient" account. Privileged roles
+// (admin/doctor/receptionist) can only be created by an authenticated admin
+// via POST /api/auth/admin/create-user — see below.
 router.post("/signup", signupLimiter, async (req: Request, res: Response) => {
   try {
-    const { email, password, fullName, role, phone } = signupSchema.parse(req.body);
+    const { email, password, fullName, phone } = signupSchema.parse(req.body);
+    const role = "patient" as const;
 
     // Password strength check
     const strength = checkPasswordStrength(password);
@@ -199,7 +215,7 @@ router.post("/signup", signupLimiter, async (req: Request, res: Response) => {
         email,
         password:           await hashPassword(password),
         fullName,
-        role:               role as any,
+        role,
         phone,
         tokenVersion:       0,
         isEmailVerified:    false,
@@ -209,11 +225,9 @@ router.post("/signup", signupLimiter, async (req: Request, res: Response) => {
     });
 
     // Auto-create patient record
-    if (role === "patient") {
-      await prisma.patient.create({
-        data: { fullName: user.fullName, email: user.email, phone: user.phone, createdBy: user.id },
-      });
-    }
+    await prisma.patient.create({
+      data: { fullName: user.fullName, email: user.email, phone: user.phone, createdBy: user.id },
+    });
 
     // Send verification email (non-blocking)
     sendEmailVerification(email, fullName, emailVerifyToken).catch(console.error);
@@ -240,6 +254,73 @@ router.post("/signup", signupLimiter, async (req: Request, res: Response) => {
     return res.status(500).json({ error: "Server error during signup" });
   }
 });
+
+// ─── POST /api/auth/admin/create-user (admin only) ────────────────────────────
+// The ONLY way to create admin/doctor/receptionist accounts. Requires an
+// authenticated admin session — see requireRole("admin") below.
+router.post(
+  "/admin/create-user",
+  authenticate,
+  requireRole("admin"),
+  signupLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const { email, password, fullName, role, phone } = adminCreateUserSchema.parse(req.body);
+
+      const strength = checkPasswordStrength(password);
+      if (!strength.valid) {
+        return res.status(400).json({ error: strength.feedback.join(". "), strength });
+      }
+
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) {
+        return res.status(409).json({ error: "An account with this email already exists" });
+      }
+
+      const emailVerifyToken   = generateSecureToken();
+      const emailVerifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      const user = await prisma.user.create({
+        data: {
+          email,
+          password:           await hashPassword(password),
+          fullName,
+          role:                role as any,
+          phone,
+          tokenVersion:        0,
+          isEmailVerified:     false,
+          emailVerifyToken,
+          emailVerifyExpires,
+        },
+      });
+
+      if (role === "patient") {
+        await prisma.patient.create({
+          data: { fullName: user.fullName, email: user.email, phone: user.phone, createdBy: user.id },
+        });
+      }
+
+      sendEmailVerification(email, fullName, emailVerifyToken).catch(console.error);
+
+      await auditLog("SIGNUP", {
+        userId:    user.id,
+        email,
+        ipAddress: getIp(req),
+        userAgent: getUserAgent(req),
+        metadata:  { createdByAdmin: req.user!.userId, assignedRole: role },
+      });
+
+      return res.status(201).json({
+        message: `${role} account created successfully.`,
+        user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
+      });
+    } catch (e) {
+      if (e instanceof z.ZodError) return res.status(400).json({ error: e.issues[0]?.message || "Validation error", issues: e.issues });
+      console.error("[ADMIN CREATE USER ERROR]", e);
+      return res.status(500).json({ error: "Server error" });
+    }
+  }
+);
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 router.post("/login", authLimiter, async (req: Request, res: Response) => {
@@ -592,7 +673,7 @@ router.post("/reset-password", authLimiter, async (req: Request, res: Response) 
 });
 
 // ─── POST /api/auth/change-password ──────────────────────────────────────────
-router.post("/change-password", authenticate, async (req: Request, res: Response) => {
+router.post("/change-password", authLimiter, authenticate, async (req: Request, res: Response) => {
   try {
     const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
@@ -641,7 +722,7 @@ router.post("/change-password", authenticate, async (req: Request, res: Response
 });
 
 // ─── POST /api/auth/mfa/setup ─────────────────────────────────────────────────
-router.post("/mfa/setup", authenticate, async (req: Request, res: Response) => {
+router.post("/mfa/setup", otpLimiter, authenticate, async (req: Request, res: Response) => {
   try {
     const { authenticator } = await import("otplib");
     const user = await prisma.user.findUnique({
@@ -671,7 +752,7 @@ router.post("/mfa/setup", authenticate, async (req: Request, res: Response) => {
 });
 
 // ─── POST /api/auth/mfa/verify ────────────────────────────────────────────────
-router.post("/mfa/verify", authenticate, async (req: Request, res: Response) => {
+router.post("/mfa/verify", otpLimiter, authenticate, async (req: Request, res: Response) => {
   try {
     const { totpCode } = mfaVerifySchema.parse(req.body);
     const { authenticator } = await import("otplib");
@@ -709,7 +790,7 @@ router.post("/mfa/verify", authenticate, async (req: Request, res: Response) => 
 });
 
 // ─── POST /api/auth/mfa/disable ───────────────────────────────────────────────
-router.post("/mfa/disable", authenticate, async (req: Request, res: Response) => {
+router.post("/mfa/disable", authLimiter, authenticate, async (req: Request, res: Response) => {
   try {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required to disable MFA" });

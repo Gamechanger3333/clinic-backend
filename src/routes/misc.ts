@@ -21,7 +21,9 @@ profileRouter.patch("/", async (req: Request, res: Response) => {
 export const usersRouter = Router();
 usersRouter.use(authenticate);
 
-usersRouter.get("/", async (_req: Request, res: Response) => {
+// Full user directory (names, emails, roles) — staff only. A patient account
+// has no legitimate reason to enumerate every other account in the system.
+usersRouter.get("/", requireRole("admin", "doctor", "receptionist"), async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
     select: { id: true, fullName: true, email: true, role: true, createdAt: true },
   });

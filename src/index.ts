@@ -33,6 +33,7 @@ import prescriptionsRouter from "./routes/prescriptions";
 import medicalRecordsRouter from "./routes/medicalRecords";
 import { profileRouter, usersRouter, dashboardRouter } from "./routes/misc";
 import { apiLimiter } from "./middleware/rateLimiter";
+import { csrfProtection } from "./middleware/auth";
 import { pruneExpiredTokens } from "./lib/auth";
 
 const app = express();
@@ -113,6 +114,26 @@ app.use("/api", apiLimiter);
 app.use((req, res, next) => {
   res.setHeader("X-Request-Id", (req as any).requestId);
   next();
+});
+
+// ─── CSRF Protection ──────────────────────────────────────────────────────────
+// Applied globally to every state-mutating request. Endpoints listed below are
+// exempt because they happen BEFORE a session/CSRF cookie can exist (signup,
+// login, refresh) or are protected by an unguessable single-use token instead
+// of a session (verify-email, forgot/reset-password). Every other mutating
+// endpoint requires the X-CSRF-Token header to match the cf_csrf cookie.
+const CSRF_EXEMPT_PATHS = new Set([
+  "/api/auth/signup",
+  "/api/auth/login",
+  "/api/auth/refresh",
+  "/api/auth/verify-email",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+]);
+
+app.use((req, res, next) => {
+  if (CSRF_EXEMPT_PATHS.has(req.path)) return next();
+  return csrfProtection(req, res, next);
 });
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
