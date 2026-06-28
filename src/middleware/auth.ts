@@ -78,16 +78,22 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
 
   // 2) Silent refresh — access token missing or expired
   if (refreshToken) {
-    const payload = await verifyRefreshToken(refreshToken);
-    if (payload) {
+    const result = await verifyRefreshToken(refreshToken);
+    if (result) {
+      const { payload } = result;
+      const jti = payload.jti;
       const valid = await validateTokenVersion(payload.userId, payload.tokenVersion ?? 0);
       if (valid) {
-        // Rotate: revoke old refresh token, issue new pair
-        await revokeRefreshToken(payload.jti);
         const { jti: _jti, iat: _iat, exp: _exp, ...cleanPayload } = payload as any;
 
-        const newAccess  = await signAccessToken(cleanPayload);
-        const newRefresh = await signRefreshToken(cleanPayload, { userAgent: ua, ipAddress: ip });
+        // Sign the new pair FIRST so we have its jti to link the old token to
+        // (replacedByJti) before revoking — this lets a concurrent request
+        // racing on the same old refresh cookie follow the chain instead of
+        // being rejected. See verifyRefreshToken's race-safety logic.
+        const newAccess = await signAccessToken(cleanPayload);
+        const { token: newRefresh, jti: newJti } = await signRefreshToken(cleanPayload, { userAgent: ua, ipAddress: ip });
+
+        await revokeRefreshToken(jti, newJti);
 
         res.cookie(ACCESS_COOKIE,  newAccess,  ACCESS_COOKIE_OPTIONS);
         res.cookie(REFRESH_COOKIE, newRefresh, REFRESH_COOKIE_OPTIONS);

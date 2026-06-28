@@ -142,8 +142,8 @@ async function issueTokenPair(
   payload: { userId: string; email: string; role: string; fullName: string; tokenVersion: number },
   req:     Request
 ) {
-  const accessToken  = await signAccessToken(payload);
-  const refreshToken = await signRefreshToken(payload, {
+  const accessToken = await signAccessToken(payload);
+  const { token: refreshToken } = await signRefreshToken(payload, {
     userAgent: getUserAgent(req),
     ipAddress: getIp(req),
   });
@@ -155,8 +155,15 @@ async function issueTokenPair(
   res.cookie("cf_csrf", csrfToken, {
     httpOnly: false,               // JS must read this to send as header
     secure:   process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge:   15 * 60,
+    // NOTE: this cookie is intentionally "lax", not "strict". It's the
+    // double-submit CSRF token, not a session credential — the real
+    // session lives in the httpOnly cf_at/cf_rt cookies, which stay
+    // "strict". "strict" here was being silently dropped by the browser
+    // for the frontend(3000)/backend(5000) cross-port dev setup, which
+    // meant the cookie never reached document.cookie at all and every
+    // mutating request failed CSRF validation.
+    sameSite: "lax",
+    maxAge:   15 * 60 * 1000, // ms — Express res.cookie() maxAge is milliseconds, NOT seconds
     path:     "/",
   });
 
@@ -169,8 +176,8 @@ router.get("/csrf-token", (_req, res) => {
   res.cookie("cf_csrf", token, {
     httpOnly: false,
     secure:   process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge:   15 * 60,
+    sameSite: "lax", // see note in issueTokenPair above
+    maxAge:   15 * 60 * 1000, // ms — Express res.cookie() maxAge is milliseconds, NOT seconds
     path:     "/",
   });
   return res.json({ csrfToken: token });
@@ -412,8 +419,8 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
 router.post("/logout", async (req: Request, res: Response) => {
   const refreshToken = req.cookies[REFRESH_COOKIE];
   if (refreshToken) {
-    const payload = await verifyRefreshToken(refreshToken);
-    if (payload?.jti) await revokeRefreshToken(payload.jti);
+    const result = await verifyRefreshToken(refreshToken);
+    if (result?.payload.jti) await revokeRefreshToken(result.payload.jti);
   }
 
   const ip = getIp(req);
@@ -428,6 +435,9 @@ router.post("/logout", async (req: Request, res: Response) => {
   res.clearCookie(ACCESS_COOKIE,  { path: "/" });
   res.clearCookie(REFRESH_COOKIE, { path: "/" });
   res.clearCookie("cf_csrf",      { path: "/" });
+  // Cleanup: clear a legacy cookie from a now-removed frontend auth system,
+  // in case it's still sitting in some browsers from before that code was deleted.
+  res.clearCookie("clinicflow_refresh", { path: "/" });
   return res.json({ message: "Logged out successfully" });
 });
 
@@ -445,6 +455,7 @@ router.post("/logout-all", authenticate, async (req: Request, res: Response) => 
   res.clearCookie(ACCESS_COOKIE,  { path: "/" });
   res.clearCookie(REFRESH_COOKIE, { path: "/" });
   res.clearCookie("cf_csrf",      { path: "/" });
+  res.clearCookie("clinicflow_refresh", { path: "/" });
 
   await auditLog("LOGOUT_ALL", { userId, email: req.user!.email, ipAddress: getIp(req) });
   return res.json({ message: "All sessions terminated successfully" });
@@ -455,8 +466,9 @@ router.post("/refresh", async (req: Request, res: Response) => {
   const refreshToken = req.cookies[REFRESH_COOKIE];
   if (!refreshToken) return res.status(401).json({ error: "No refresh token" });
 
-  const payload = await verifyRefreshToken(refreshToken);
-  if (!payload) return res.status(401).json({ error: "Invalid or expired refresh token" });
+  const result = await verifyRefreshToken(refreshToken);
+  if (!result) return res.status(401).json({ error: "Invalid or expired refresh token" });
+  const { payload } = result;
 
   const user = await prisma.user.findUnique({
     where:  { id: payload.userId },
@@ -466,10 +478,19 @@ router.post("/refresh", async (req: Request, res: Response) => {
     return res.status(401).json({ error: "Session invalidated. Please sign in again." });
   }
 
-  // Rotate
-  await revokeRefreshToken(payload.jti);
+  // Rotate (race-safe — link old -> new before revoking, see issueTokenPair/signRefreshToken)
   const { jti: _j, iat: _i, exp: _e, ...clean } = payload as any;
-  await issueTokenPair(res, { ...clean, tokenVersion: user.tokenVersion }, req);
+  const cleanPayload = { ...clean, tokenVersion: user.tokenVersion };
+
+  const accessToken = await signAccessToken(cleanPayload);
+  const { token: newRefreshToken, jti: newJti } = await signRefreshToken(cleanPayload, {
+    userAgent: getUserAgent(req),
+    ipAddress: getIp(req),
+  });
+  await revokeRefreshToken(payload.jti, newJti);
+
+  res.cookie(ACCESS_COOKIE,  accessToken,     ACCESS_COOKIE_OPTIONS);
+  res.cookie(REFRESH_COOKIE, newRefreshToken, REFRESH_COOKIE_OPTIONS);
 
   return res.json({ message: "Tokens refreshed" });
 });

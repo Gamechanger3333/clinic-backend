@@ -93,7 +93,7 @@ export async function sendEmailVerification(
   fullName: string,
   token:    string
 ): Promise<void> {
-  const link = `${APP_URL}/auth/verify-email?token=${token}`;
+  const link = `${APP_URL}/auth?mode=verify-email&token=${token}`;
 
   const html = baseTemplate("Verify Your Email", `
     <h2 style="color:#111;margin-top:0;">Verify your email address</h2>
@@ -158,7 +158,7 @@ export async function sendPasswordReset(
   fullName: string,
   token:    string
 ): Promise<void> {
-  const link = `${APP_URL}/auth/reset-password?token=${token}`;
+  const link = `${APP_URL}/auth?mode=reset&token=${token}`;
 
   const html = baseTemplate("Reset Your Password", `
     <h2 style="color:#111;margin-top:0;">Reset your password</h2>

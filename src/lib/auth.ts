@@ -46,7 +46,7 @@ export const ACCESS_COOKIE_OPTIONS = {
   httpOnly: true,
   secure:   isProd,
   sameSite: "strict" as const,   // CSRF mitigation (upgraded from lax)
-  maxAge:   15 * 60,             // seconds (not ms — express cookie-parser uses seconds)
+  maxAge:   15 * 60 * 1000,      // ms — Express res.cookie() maxAge is milliseconds, NOT seconds (this was the root cause of every session/CSRF cookie expiring almost instantly)
   path:     "/",
 };
 
@@ -54,7 +54,7 @@ export const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure:   isProd,
   sameSite: "strict" as const,
-  maxAge:   7 * 24 * 60 * 60,
+  maxAge:   7 * 24 * 60 * 60 * 1000, // ms
   path:     "/",
 };
 
@@ -80,7 +80,7 @@ export async function signAccessToken(payload: JWTPayload): Promise<string> {
 export async function signRefreshToken(
   payload: JWTPayload,
   meta: { userAgent?: string; ipAddress?: string } = {}
-): Promise<string> {
+): Promise<{ token: string; jti: string }> {
   const jti       = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -95,12 +95,14 @@ export async function signRefreshToken(
     },
   });
 
-  return new SignJWT({ ...payload })
+  const token = await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(REFRESH_EXPIRES)
     .setJti(jti)
     .sign(REFRESH_SECRET);
+
+  return { token, jti };
 }
 
 // ─── Token Verification ───────────────────────────────────────────────────────
@@ -117,24 +119,44 @@ export async function verifyAccessToken(
 
 export async function verifyRefreshToken(
   token: string
-): Promise<(JWTPayload & { jti: string }) | null> {
+): Promise<{ payload: JWTPayload & { jti: string }; followedChain: boolean } | null> {
   try {
     const { payload } = await jwtVerify(token, REFRESH_SECRET);
     const p = payload as unknown as JWTPayload & { jti: string };
 
-    // DB lookup — ensures revoked tokens (logout, logout-all) are rejected
-    const stored = await prisma.refreshToken.findUnique({ where: { jti: p.jti } });
+    let stored = await prisma.refreshToken.findUnique({ where: { jti: p.jti } });
+    if (!stored) return null;
+
+    // Race-safety: if this exact token was already rotated out by a
+    // concurrent request (e.g. two parallel page-load fetches racing on the
+    // same refresh cookie), follow the chain to whatever replaced it instead
+    // of rejecting outright. Bounded to a few hops so a genuinely revoked
+    // chain (logout / logout-all) can't be walked indefinitely.
+    let followedChain = false;
+    let hops = 0;
+    while (stored?.isRevoked && stored.replacedByJti && hops < 5) {
+      followedChain = true;
+      hops++;
+      stored = await prisma.refreshToken.findUnique({ where: { jti: stored.replacedByJti } });
+    }
+
     if (!stored || stored.isRevoked || stored.expiresAt < new Date()) return null;
 
-    return p;
+    // Return the userId/tokenVersion etc. from the ORIGINAL JWT payload
+    // (claims don't change across rotation within the same login session),
+    // but the jti of whichever token row we actually validated against.
+    return { payload: { ...p, jti: stored.jti }, followedChain };
   } catch {
     return null;
   }
 }
 
 // ─── Refresh Token Revocation ─────────────────────────────────────────────────
-export async function revokeRefreshToken(jti: string): Promise<void> {
-  await prisma.refreshToken.updateMany({ where: { jti }, data: { isRevoked: true } });
+export async function revokeRefreshToken(jti: string, replacedByJti?: string): Promise<void> {
+  await prisma.refreshToken.updateMany({
+    where: { jti },
+    data:  { isRevoked: true, ...(replacedByJti ? { replacedByJti } : {}) },
+  });
 }
 
 export async function revokeAllUserTokens(userId: string): Promise<void> {
