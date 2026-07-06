@@ -99,6 +99,19 @@ export const strictApiLimiter = rateLimit({
   legacyHeaders:   false,
 });
 
+// ─── AI Assistant Limiter ─────────────────────────────────────────────────────
+// Groq calls cost money + tokens, and the public landing-page variant has no
+// auth to key off, so this is IP-based and tighter than general API traffic.
+export const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max:      12,
+  message:  "You're sending messages too quickly. Please wait a moment.",
+  keyGenerator: (req) => `ai:${getIp(req)}`,
+  handler:      rateLimitHandler,
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
+
 // ─── Signup Limiter ───────────────────────────────────────────────────────────
 export const signupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,  // 1 hour

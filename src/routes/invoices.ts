@@ -5,14 +5,19 @@ import { authenticate, requireRole } from "../middleware/auth";
 const router = Router();
 router.use(authenticate);
 
-// Billing data — staff only (admin/receptionist handle billing; doctors can
-// view to confirm a visit was billed). Patient self-service is out of scope
-// until Patient<->User linkage exists — see review notes.
+// Billing data — staff handle billing; patients may view (read-only) only
+// their own invoices, never anyone else's.
 const STAFF_ROLES = ["admin", "doctor", "receptionist"];
+const ALL_ROLES = [...STAFF_ROLES, "patient"];
 
-router.get("/", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
-  const patientId = (req.query.patientId as string) || undefined;
+router.get("/", requireRole(...ALL_ROLES), async (req: Request, res: Response) => {
+  let patientId = (req.query.patientId as string) || undefined;
   const status = (req.query.status as string) || undefined;
+
+  if (req.user!.role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: req.user!.userId } });
+    patientId = patient?.id || "__none__";
+  }
 
   const invoices = await prisma.invoice.findMany({
     where: {
@@ -29,7 +34,7 @@ router.get("/", requireRole(...STAFF_ROLES), async (req: Request, res: Response)
   return res.json({ invoices });
 });
 
-router.get("/:id", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
+router.get("/:id", requireRole(...ALL_ROLES), async (req: Request, res: Response) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: req.params.id },
     include: {
@@ -39,6 +44,13 @@ router.get("/:id", requireRole(...STAFF_ROLES), async (req: Request, res: Respon
     },
   });
   if (!invoice) return res.status(404).json({ error: "Not found" });
+
+  if (req.user!.role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: req.user!.userId } });
+    if (!patient || invoice.patientId !== patient.id) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+  }
   return res.json({ invoice });
 });
 

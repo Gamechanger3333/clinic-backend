@@ -5,12 +5,16 @@ import { authenticate, requireRole } from "../middleware/auth";
 const router = Router();
 router.use(authenticate);
 
-// Lab results are PHI — staff only. Patient self-service is out of scope
-// until Patient<->User linkage exists — see review notes.
+// Lab results are PHI — staff see all; patients may view only their own.
 const STAFF_ROLES = ["admin", "doctor", "receptionist"];
+const ALL_ROLES = [...STAFF_ROLES, "patient"];
 
-router.get("/", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
-  const patientId = (req.query.patientId as string) || undefined;
+router.get("/", requireRole(...ALL_ROLES), async (req: Request, res: Response) => {
+  let patientId = (req.query.patientId as string) || undefined;
+  if (req.user!.role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: req.user!.userId } });
+    patientId = patient?.id || "__none__";
+  }
   const reports = await prisma.labReport.findMany({
     where: { ...(patientId ? { patientId } : {}) },
     include: {

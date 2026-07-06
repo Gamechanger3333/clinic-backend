@@ -34,19 +34,38 @@ usersRouter.get("/", requireRole("admin", "doctor", "receptionist"), async (_req
 export const dashboardRouter = Router();
 dashboardRouter.use(authenticate);
 
-dashboardRouter.get("/stats", async (_req: Request, res: Response) => {
+// Stats are scoped to WHO is asking:
+//  - patient      → only their own appointments (never another patient's data)
+//  - doctor       → only appointments assigned to them
+//  - receptionist / admin → clinic-wide, front-desk operational view
+dashboardRouter.get("/stats", async (req: Request, res: Response) => {
   const today = format(new Date(), "yyyy-MM-dd");
+  const role = req.user!.role;
+  const userId = req.user!.userId;
+
+  // Build a role-scoped appointment filter up front so every count below
+  // stays consistent with what the person is actually allowed to see.
+  let appointmentScope: Record<string, any> = {};
+  if (role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: userId } });
+    appointmentScope = { patientId: patient?.id || "__none__" };
+  } else if (role === "doctor") {
+    // Appointment.doctorId references the doctor's User.id directly.
+    appointmentScope = { doctorId: userId };
+  }
+  // receptionist/admin → no extra scope, i.e. clinic-wide.
 
   const [todayCount, totalPatients, pendingCount, completedCount, totalDoctors, totalDepartments, lowStockMeds, recentAppointments, revenueResult] =
     await Promise.all([
-      prisma.appointment.count({ where: { appointmentDate: today } }),
-      prisma.patient.count(),
-      prisma.appointment.count({ where: { status: "pending" } }),
-      prisma.appointment.count({ where: { appointmentDate: today, status: "completed" } }),
+      prisma.appointment.count({ where: { ...appointmentScope, appointmentDate: today } }),
+      role === "patient" ? Promise.resolve(1) : prisma.patient.count(),
+      prisma.appointment.count({ where: { ...appointmentScope, status: "pending" } }),
+      prisma.appointment.count({ where: { ...appointmentScope, appointmentDate: today, status: "completed" } }),
       prisma.doctor.count(),
       prisma.department.count(),
       prisma.medicine.count({ where: { isActive: true, stockQuantity: { lte: 10 } } }),
       prisma.appointment.findMany({
+        where: appointmentScope,
         include: {
           patient: { select: { fullName: true } },
           doctor: { select: { fullName: true } },
@@ -54,7 +73,9 @@ dashboardRouter.get("/stats", async (_req: Request, res: Response) => {
         orderBy: [{ appointmentDate: "desc" }, { appointmentTime: "desc" }],
         take: 5,
       }),
-      prisma.invoice.aggregate({ where: { status: "paid" }, _sum: { paidAmount: true } }),
+      role === "admin"
+        ? prisma.invoice.aggregate({ where: { status: "paid" }, _sum: { paidAmount: true } })
+        : Promise.resolve({ _sum: { paidAmount: 0 } }),
     ]);
 
   return res.json({
@@ -67,5 +88,6 @@ dashboardRouter.get("/stats", async (_req: Request, res: Response) => {
     lowStockMedicines: lowStockMeds,
     totalRevenue: revenueResult._sum.paidAmount || 0,
     recentAppointments,
+    role,
   });
 });

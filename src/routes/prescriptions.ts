@@ -5,9 +5,15 @@ import { authenticate, requireRole } from "../middleware/auth";
 const router = Router();
 router.use(authenticate);
 
-// Prescriptions are PHI — staff only.
-router.get("/", requireRole("admin", "doctor", "receptionist"), async (_req: Request, res: Response) => {
+// Prescriptions are PHI — staff see all; patients may view only their own.
+router.get("/", requireRole("admin", "doctor", "receptionist", "patient"), async (req: Request, res: Response) => {
+  let where: Record<string, any> = {};
+  if (req.user!.role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: req.user!.userId } });
+    where = { patientId: patient?.id || "__none__" };
+  }
   const prescriptions = await prisma.prescription.findMany({
+    where,
     include: {
       patient: { select: { id: true, fullName: true, email: true } },
       appointment: { select: { appointmentDate: true } },

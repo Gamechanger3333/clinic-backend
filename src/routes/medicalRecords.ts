@@ -9,8 +9,12 @@ router.use(authenticate);
 // Reads: any clinical/admin staff. Writes: doctors and admin only —
 // receptionists should not be able to author clinical notes.
 // Patient self-service is out of scope until Patient<->User linkage exists.
-router.get("/", requireRole("admin", "doctor", "receptionist"), async (req: Request, res: Response) => {
-  const patientId = (req.query.patientId as string) || undefined;
+router.get("/", requireRole("admin", "doctor", "receptionist", "patient"), async (req: Request, res: Response) => {
+  let patientId = (req.query.patientId as string) || undefined;
+  if (req.user!.role === "patient") {
+    const patient = await prisma.patient.findFirst({ where: { createdBy: req.user!.userId } });
+    patientId = patient?.id || "__none__";
+  }
   const records = await prisma.medicalRecord.findMany({
     where: { ...(patientId ? { patientId } : {}) },
     include: {

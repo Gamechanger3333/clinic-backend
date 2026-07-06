@@ -32,6 +32,7 @@ import notificationsRouter from "./routes/notifications";
 import prescriptionsRouter from "./routes/prescriptions";
 import medicalRecordsRouter from "./routes/medicalRecords";
 import { profileRouter, usersRouter, dashboardRouter } from "./routes/misc";
+import aiRouter from "./routes/ai";
 import { apiLimiter } from "./middleware/rateLimiter";
 import { csrfProtection } from "./middleware/auth";
 import { pruneExpiredTokens } from "./lib/auth";
@@ -129,6 +130,7 @@ const CSRF_EXEMPT_PATHS = new Set([
   "/api/auth/verify-email",
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
+  "/api/ai/public-chat", // anonymous landing-page visitors have no CSRF session
 ]);
 
 app.use((req, res, next) => {
@@ -151,6 +153,7 @@ app.use("/api/medical-records", medicalRecordsRouter);
 app.use("/api/profile",         profileRouter);
 app.use("/api/users",           usersRouter);
 app.use("/api/dashboard",       dashboardRouter);
+app.use("/api/ai",              aiRouter);
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (_req, res) =>
