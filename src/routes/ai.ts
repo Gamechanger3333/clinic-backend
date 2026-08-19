@@ -95,12 +95,29 @@ router.post("/chat", aiLimiter, authenticate, async (req: Request, res: Response
   }
 });
 
+// ─── Aggregate, non-PHI stats for anonymous visitors — counts only, never
+// names/dates/records for any specific patient ─────────────────────────────
+async function buildPublicContextSummary(): Promise<string | undefined> {
+  try {
+    const [totalDoctors, totalDepartments, availableDoctors] = await Promise.all([
+      prisma.doctor.count(),
+      prisma.department.count(),
+      prisma.doctor.count({ where: { isAvailable: true } }),
+    ]);
+    return `- ClinicFlow currently has ${totalDoctors} doctor(s) across ${totalDepartments} department(s), ${availableDoctors} currently accepting appointments.`;
+  } catch (e) {
+    console.error("[AI PUBLIC CONTEXT ERROR]", e);
+    return undefined;
+  }
+}
+
 // ─── POST /api/ai/public-chat (no auth — landing page widget) ────────────────
 router.post("/public-chat", aiLimiter, async (req: Request, res: Response) => {
   try {
     const { message, history } = chatSchema.parse(req.body);
     const fullHistory: ChatMessage[] = [...history, { role: "user", content: message }];
-    const reply = await askGroq("public", fullHistory);
+    const context = await buildPublicContextSummary();
+    const reply = await askGroq("public", fullHistory, context);
     return res.json({ reply, role: "public" });
   } catch (e: any) {
     if (e instanceof z.ZodError) {

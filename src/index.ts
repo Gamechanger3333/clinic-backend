@@ -177,17 +177,23 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
+// Only bind a real port when this file is run directly (`npm run dev` / `node
+// dist/index.js`). When it's imported — e.g. by the Vitest+Supertest suite —
+// the app is exercised in-memory via supertest(app), no port or DB pruning
+// side effects needed.
 const PORT = parseInt(process.env.PORT || "3001", 10);
-app.listen(PORT, async () => {
-  console.log(`✅ ClinicFlow API running on http://localhost:${PORT}`);
+if (require.main === module) {
+  app.listen(PORT, async () => {
+    console.log(`✅ ClinicFlow API running on http://localhost:${PORT}`);
 
-  // Prune stale refresh tokens on startup
-  pruneExpiredTokens()
-    .then(() => console.log("🧹 Pruned expired refresh tokens"))
-    .catch(console.error);
+    // Prune stale refresh tokens on startup
+    pruneExpiredTokens()
+      .then(() => console.log("🧹 Pruned expired refresh tokens"))
+      .catch(console.error);
 
-  // Schedule token pruning every 6 hours
-  setInterval(() => pruneExpiredTokens().catch(console.error), 6 * 60 * 60 * 1000);
-});
+    // Schedule token pruning every 6 hours
+    setInterval(() => pruneExpiredTokens().catch(console.error), 6 * 60 * 60 * 1000);
+  });
+}
 
 export default app;

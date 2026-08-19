@@ -136,7 +136,41 @@ GET             /api/dashboard/stats
 ## Security Notes
 
 > ⚠️ **Production ke liye:**
-> - In-memory blacklist aur lockout store ko **Redis** se replace karo
 > - `HTTPS` zaroori hai (cookies `Secure` flag ke saath)
 > - `FRONTEND_URL` properly set karo CORS ke liye
 > - `ACCESS_TOKEN_SECRET` aur `REFRESH_TOKEN_SECRET` strong random strings honi chahiye (32+ chars)
+>
+> Note: refresh-token blacklist aur login lockout ab **DB-persisted** hain
+> (Postgres ke `RefreshToken` aur `User.lockedUntil`/`failedLoginCount`
+> columns), in-memory nahi — is liye restarts aur multiple instances ke
+> beech bhi state survive karta hai. Agar traffic bohot zyada scale ho
+> (high-frequency lockout checks / token lookups), Redis caching layer
+> add karna ek future optimization ho sakta hai, but current design is
+> already correct without it.
+
+---
+
+## Testing
+
+```bash
+npm test          # run the Vitest + Supertest suite once
+npm run test:watch  # watch mode
+```
+
+The suite (`src/__tests__/`) covers:
+- Security headers (Helmet CSP/HSTS, no `X-Powered-By`, per-request `X-Request-Id`)
+- 404 handling and request body size limits
+- CSRF double-submit token generation/verification, including malformed-input edge cases
+- Password-strength validation rules
+- The `authenticate` + CSRF gate across every protected route (unauthenticated requests correctly rejected)
+
+These tests stub the Prisma client (see `src/__tests__/setup.ts`) since every
+case here is rejected by middleware before a DB call would happen — this
+keeps the suite runnable in any environment, including CI containers
+without a live Postgres instance. When adding tests that need real
+data (e.g. verifying RBAC scoping actually filters rows), point
+`DATABASE_URL` at a disposable test database and write those as a
+separate integration-test tier rather than extending the stubbed suite.
+
+CI: see `.github/workflows/ci.yml` — runs typecheck + the test suite on
+every push and pull request.

@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRole } from "../middleware/auth";
 
@@ -8,6 +9,27 @@ router.use(authenticate);
 // Lab results are PHI — staff see all; patients may view only their own.
 const STAFF_ROLES = ["admin", "doctor", "receptionist"];
 const ALL_ROLES = [...STAFF_ROLES, "patient"];
+
+const createSchema = z.object({
+  patientId: z.string().min(1),
+  doctorId: z.string().min(1),
+  testName: z.string().trim().min(1).max(200),
+  testDate: z.string().min(1),
+  results: z.string().max(4000).optional(),
+  normalRange: z.string().max(200).optional(),
+  notes: z.string().max(2000).optional(),
+});
+
+const patchSchema = z
+  .object({
+    testName: z.string().trim().min(1).max(200).optional(),
+    testDate: z.string().min(1).optional(),
+    results: z.string().max(4000).optional(),
+    normalRange: z.string().max(200).optional(),
+    status: z.enum(["pending", "completed", "cancelled"]).optional(),
+    notes: z.string().max(2000).optional(),
+  })
+  .strict();
 
 router.get("/", requireRole(...ALL_ROLES), async (req: Request, res: Response) => {
   let patientId = (req.query.patientId as string) || undefined;
@@ -28,12 +50,11 @@ router.get("/", requireRole(...ALL_ROLES), async (req: Request, res: Response) =
 });
 
 router.post("/", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
-  const { patientId, doctorId, testName, testDate, results, normalRange, notes } = req.body;
-  if (!patientId || !doctorId || !testName || !testDate)
-    return res.status(400).json({ error: "patientId, doctorId, testName, testDate required" });
+  const parsed = createSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation error" });
 
   const report = await prisma.labReport.create({
-    data: { patientId, doctorId, testName, testDate, results, normalRange, notes, orderedById: req.user!.userId },
+    data: { ...parsed.data, orderedById: req.user!.userId },
     include: {
       patient: { select: { id: true, fullName: true } },
       doctor: { include: { user: { select: { id: true, fullName: true } } } },
@@ -49,8 +70,14 @@ router.get("/:id", requireRole(...STAFF_ROLES), async (req: Request, res: Respon
 });
 
 router.patch("/:id", requireRole(...STAFF_ROLES), async (req: Request, res: Response) => {
-  const report = await prisma.labReport.update({ where: { id: req.params.id }, data: req.body });
-  return res.json({ report });
+  const parsed = patchSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation error" });
+  try {
+    const report = await prisma.labReport.update({ where: { id: req.params.id }, data: parsed.data });
+    return res.json({ report });
+  } catch {
+    return res.status(404).json({ error: "Not found" });
+  }
 });
 
 export default router;
