@@ -18,7 +18,7 @@ import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "./prisma";
-import type { AuthEventType } from "@prisma/client";
+import type { AuthEventType, Prisma } from "@prisma/client";
 
 // ─── Secrets ─────────────────────────────────────────────────────────────────
 // Fail fast in production if secrets are defaults
@@ -348,7 +348,7 @@ export async function auditLog(
     email?:     string;
     ipAddress?: string;
     userAgent?: string;
-    metadata?:  Record<string, unknown>;
+    metadata?:  Prisma.InputJsonValue;
   } = {}
 ): Promise<void> {
   try {
