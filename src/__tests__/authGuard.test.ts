@@ -50,6 +50,15 @@ describe("CSRF protection on state-mutating routes", () => {
     const res = await request(app).post("/api/auth/login").send({});
     expect(res.status).not.toBe(403);
   });
+
+  it("exempts /api/auth/demo-login from CSRF — a first-time visitor has no session yet either", async () => {
+    const res = await request(app).post("/api/auth/demo-login");
+    // Not asserting a specific success status here: the mocked Prisma client
+    // (setup.ts) makes the DB lookup inside the route fail, which the route
+    // catches and turns into a 500 — that's fine for this test's purpose,
+    // it only needs to prove CSRF isn't what blocked the request.
+    expect(res.status).not.toBe(403);
+  });
 });
 
 describe("Zod input validation on protected routes (shape-only, pre-DB)", () => {

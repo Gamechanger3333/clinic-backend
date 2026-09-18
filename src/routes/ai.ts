@@ -62,12 +62,15 @@ async function buildContextSummary(role: AssistantRole, userId: string): Promise
     }
 
     if (role === "receptionist" || role === "admin") {
-      const [todayCount, pending, lowStock] = await Promise.all([
+      const [todayCount, pending, lowStock, totalDoctors, totalPatients, totalDepartments] = await Promise.all([
         prisma.appointment.count({ where: { appointmentDate: today } }),
         prisma.appointment.count({ where: { status: "pending" } }),
         prisma.medicine.count({ where: { isActive: true, stockQuantity: { lte: 10 } } }),
+        prisma.doctor.count(),
+        prisma.patient.count(),
+        prisma.department.count(),
       ]);
-      return `- Clinic-wide today: ${todayCount} appointment(s), ${pending} pending approval(s), ${lowStock} medicine(s) low on stock.`;
+      return `- Staffing: ${totalDoctors} doctor(s) across ${totalDepartments} department(s). Patients: ${totalPatients} registered in total.\n- Clinic-wide today: ${todayCount} appointment(s), ${pending} pending approval(s), ${lowStock} medicine(s) low on stock.`;
     }
   } catch (e) {
     console.error("[AI CONTEXT ERROR]", e);

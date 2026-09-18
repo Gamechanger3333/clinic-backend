@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { DEMO_USER_EMAIL, DEMO_USER_PASSWORD, DEMO_PATIENT_ID, reseedDemoPatientData } from "../src/lib/demo";
 
 const prisma = new PrismaClient();
 
@@ -35,6 +36,41 @@ async function main() {
     create: { email: "receptionist@clinicflow.com", password: receptPw, fullName: "Jane Smith", role: "receptionist", tokenVersion: 0 },
   });
 
+  // ── Demo account — email/password never require verification, so anyone
+  // can log straight in and explore the app as a real patient. Created here;
+  // its sample data is seeded further below, once doctors exist. ──
+  const demoPw = await bcrypt.hash(DEMO_USER_PASSWORD, 12);
+  const demoUser = await prisma.user.upsert({
+    where: { email: DEMO_USER_EMAIL },
+    update: { password: demoPw, isEmailVerified: true },
+    create: {
+      email: DEMO_USER_EMAIL,
+      password: demoPw,
+      fullName: "Demo Patient",
+      role: "patient",
+      phone: "+1-555-0100",
+      tokenVersion: 0,
+      isEmailVerified: true, // demo skips the real-user email-verification step entirely
+    },
+  });
+
+  await prisma.patient.upsert({
+    where: { id: DEMO_PATIENT_ID },
+    update: { fullName: demoUser.fullName, email: demoUser.email, phone: demoUser.phone },
+    create: {
+      id: DEMO_PATIENT_ID,
+      fullName: demoUser.fullName,
+      email: demoUser.email,
+      phone: demoUser.phone,
+      dateOfBirth: "1995-06-12",
+      gender: "Other",
+      address: "42 Demo Lane, Sample City",
+      bloodGroup: "O+",
+      allergies: "None on record",
+      createdBy: demoUser.id,
+    },
+  });
+
   // Departments
   const cardio = await prisma.department.upsert({
     where: { id: "dept-cardio" },
@@ -66,6 +102,11 @@ async function main() {
     update: {},
     create: { userId: doctorUser2.id, departmentId: neuro.id, specialization: "Neurologist", licenseNumber: "LIC-002", experience: 8, consultationFee: 200, bio: "Expert neurologist." },
   });
+
+  // Now that doctors exist, seed the demo patient's realistic sample data
+  // (appointments, prescriptions, invoices, lab reports, notifications).
+  console.log("🌱 Seeding demo patient's sample data (appointments, prescriptions, invoices, lab reports)...");
+  await reseedDemoPatientData(demoUser.id);
 
   // Patients
   const patient1 = await prisma.patient.upsert({
@@ -157,6 +198,7 @@ async function main() {
   console.log("  Doctor:       doctor@clinicflow.com       / Doctor@123");
   console.log("  Doctor 2:     doctor2@clinicflow.com      / Doctor@123");
   console.log("  Receptionist: receptionist@clinicflow.com / Recept@123");
+  console.log(`  Demo Patient: ${DEMO_USER_EMAIL} / ${DEMO_USER_PASSWORD}`);
 }
 
 main().catch(console.error).finally(() => prisma.$disconnect());

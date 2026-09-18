@@ -126,6 +126,7 @@ app.use((req, res, next) => {
 const CSRF_EXEMPT_PATHS = new Set([
   "/api/auth/signup",
   "/api/auth/login",
+  "/api/auth/demo-login", // one-click demo — same reasoning as signup/login below
   "/api/auth/refresh",
   "/api/auth/verify-email",
   "/api/auth/forgot-password",

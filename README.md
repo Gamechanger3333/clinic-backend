@@ -30,6 +30,23 @@ npm run dev
 
 ---
 
+## Demo Access
+
+Email: `demo@clinicflow.com`
+Password: `Demo@1234`
+
+(Note: this is a shared account — its data resets automatically on every
+demo login, and profile/password/2FA changes are disabled so it stays
+usable for the next visitor too. Real signup is also available if you'd
+rather create your own account.)
+
+On the login page, the **"Try Demo Account"** button logs straight in with
+these credentials via `POST /api/auth/demo-login` — no typing required.
+Logic lives in `src/lib/demo.ts`; credentials are configurable via the
+`DEMO_USER_EMAIL` / `DEMO_USER_PASSWORD` env vars (see `.env.example`).
+
+---
+
 ## 🔐 Authentication — Kya Kya Features Hain
 
 ### Original NextJS se kya improve hua

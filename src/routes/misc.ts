@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireRole } from "../middleware/auth";
+import { isDemoAccount } from "../lib/demo";
 import { format } from "date-fns";
 
 // ─── Profile ─────────────────────────────────────────────────────────────────
@@ -8,6 +9,9 @@ export const profileRouter = Router();
 profileRouter.use(authenticate);
 
 profileRouter.patch("/", async (req: Request, res: Response) => {
+  if (isDemoAccount(req.user!.email)) {
+    return res.status(403).json({ error: "This is a shared demo account — profile edits are disabled so every visitor sees the same clean profile." });
+  }
   const { fullName, phone } = req.body;
   const user = await prisma.user.update({
     where: { id: req.user!.userId },

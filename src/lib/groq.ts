@@ -20,6 +20,12 @@ export interface ChatMessage {
 
 const BASE_RULES = `
 You are the AI Assistant embedded inside ClinicFlow, a clinic management system.
+- Always reply in the SAME language/script the user's latest message is
+  written in. If they write in Urdu script, reply in Urdu script. If they
+  write in Roman Urdu (Urdu written in Latin letters, e.g. "kitne", "hn"),
+  reply in Roman Urdu — do not switch to English or to Urdu script. If they
+  write in English, reply in English. Match their language on every turn,
+  even if earlier turns were in a different language.
 - Be concise, warm, and practical. Use short paragraphs or bullet points.
 - You do NOT have access to live database records unless they are explicitly
   given to you in this prompt — never invent appointment times, patient names,
@@ -88,7 +94,11 @@ export async function askGroq(
     });
   }
 
-  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  // llama-3.3-70b-versatile was deprecated by Groq on Jun 17, 2026.
+  // openai/gpt-oss-120b is Groq's official recommended replacement
+  // (comparable quality, function-calling support, faster inference).
+  // Still overridable via GROQ_MODEL if Groq's lineup changes again.
+  const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
   const messages = [
     { role: "system", content: getSystemPrompt(role, contextSummary) },

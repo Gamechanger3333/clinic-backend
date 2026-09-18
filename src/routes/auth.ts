@@ -4,6 +4,7 @@
  * Endpoints:
  *  POST /signup                  — Register (email verification queued)
  *  POST /login                   — Login with lockout + audit log
+ *  POST /demo-login              — One-click shared demo account (see src/lib/demo.ts)
  *  POST /logout                  — Revoke current session
  *  POST /logout-all              — Revoke all sessions (token version bump)
  *  POST /refresh                 — Explicit token refresh
@@ -59,6 +60,7 @@ import {
   sendSecurityAlert,
 } from "../lib/email";
 import { authenticate, requireRole } from "../middleware/auth";
+import { DEMO_USER_EMAIL, DEMO_USER_PASSWORD, isDemoAccount, reseedDemoPatientData } from "../lib/demo";
 import {
   authLimiter,
   otpLimiter,
@@ -415,7 +417,61 @@ router.post("/login", authLimiter, async (req: Request, res: Response) => {
   }
 });
 
-// ─── POST /api/auth/logout ────────────────────────────────────────────────────
+// ─── POST /api/auth/demo-login ────────────────────────────────────────────────
+// One-click access for anyone (recruiters/reviewers) to explore the app as a
+// real patient — no signup, no email verification, no MFA. Deliberately a
+// SEPARATE endpoint from /login rather than a hook inside it: the real login
+// path stays completely untouched (lockout, MFA, audit-log semantics all
+// unaffected), and this endpoint owns its own narrow, easy-to-reason-about
+// behaviour: reset-then-login. See src/lib/demo.ts for the reset logic.
+//
+// Every call wipes and reseeds the demo patient's own data first (reset
+// approach "on every login" — see reasoning in src/lib/demo.ts), so each
+// visitor gets a clean, realistic workspace rather than the last visitor's
+// edits or an empty shell.
+router.post("/demo-login", authLimiter, async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: DEMO_USER_EMAIL } });
+    if (!user) {
+      // Seed script hasn't run yet in this environment.
+      return res.status(503).json({ error: "Demo account isn't set up on this server yet." });
+    }
+
+    await reseedDemoPatientData(user.id);
+
+    await clearFailedAttempts(user.id);
+    const ip = getIp(req);
+    const ua = req.headers["user-agent"] || "";
+    await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date(), lastLoginIp: ip } });
+
+    const payload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      fullName: user.fullName,
+      tokenVersion: user.tokenVersion ?? 0,
+    };
+    await issueTokenPair(res, payload, req);
+    await auditLog("LOGIN_SUCCESS", { userId: user.id, email: user.email, ipAddress: ip, userAgent: ua, metadata: { demo: true } });
+
+    return res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        phone: user.phone,
+        isEmailVerified: user.isEmailVerified,
+        mfaEnabled: user.mfaEnabled,
+      },
+    });
+  } catch (e) {
+    console.error("[DEMO LOGIN ERROR]", e);
+    return res.status(500).json({ error: "Could not start the demo session — please try again." });
+  }
+});
+
+
 router.post("/logout", async (req: Request, res: Response) => {
   const refreshToken = req.cookies[REFRESH_COOKIE];
   if (refreshToken) {
@@ -696,6 +752,9 @@ router.post("/reset-password", authLimiter, async (req: Request, res: Response) 
 // ─── POST /api/auth/change-password ──────────────────────────────────────────
 router.post("/change-password", authLimiter, authenticate, async (req: Request, res: Response) => {
   try {
+    if (isDemoAccount(req.user!.email)) {
+      return res.status(403).json({ error: "This is a shared demo account — password changes are disabled so it stays usable for the next visitor too." });
+    }
     const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
 
     const strength = checkPasswordStrength(newPassword);
@@ -745,6 +804,9 @@ router.post("/change-password", authLimiter, authenticate, async (req: Request, 
 // ─── POST /api/auth/mfa/setup ─────────────────────────────────────────────────
 router.post("/mfa/setup", otpLimiter, authenticate, async (req: Request, res: Response) => {
   try {
+    if (isDemoAccount(req.user!.email)) {
+      return res.status(403).json({ error: "This is a shared demo account — two-factor authentication is disabled so it stays accessible to everyone." });
+    }
     const { authenticator } = await import("otplib");
     const user = await prisma.user.findUnique({
       where:  { id: req.user!.userId },
@@ -813,6 +875,9 @@ router.post("/mfa/verify", otpLimiter, authenticate, async (req: Request, res: R
 // ─── POST /api/auth/mfa/disable ───────────────────────────────────────────────
 router.post("/mfa/disable", authLimiter, authenticate, async (req: Request, res: Response) => {
   try {
+    if (isDemoAccount(req.user!.email)) {
+      return res.status(403).json({ error: "This is a shared demo account — security settings are disabled." });
+    }
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required to disable MFA" });
 
